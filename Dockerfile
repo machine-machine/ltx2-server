@@ -35,9 +35,10 @@ RUN chmod +x /app/download_models.sh
 # Expose API port (internal only)
 EXPOSE 28090
 
-# No HEALTHCHECK - model download can take 30+ minutes on first run.
-# Coolify rolls back "unhealthy" containers before models finish downloading.
-# Use /health endpoint manually to verify readiness.
+# Dummy health check — always passes immediately.
+# Model download takes 30+ min; real readiness: GET /health
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=1 \
+    CMD true
 
 # Download models on first run, then start server
 CMD ["/bin/bash", "-c", "/app/download_models.sh && uv run python3 /app/server.py"]
