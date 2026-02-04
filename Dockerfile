@@ -33,11 +33,11 @@ COPY server.py /app/server.py
 RUN chmod +x /app/download_models.sh
 
 # Expose API port (internal only)
-EXPOSE 8090
+EXPOSE 28090
 
 # Health check - generous timeout for initial model loading
 HEALTHCHECK --interval=60s --timeout=10s --start-period=600s --retries=3 \
-    CMD curl -f http://localhost:8090/health || exit 1
+    CMD curl -f http://localhost:28090/health || exit 1
 
 # Download models on first run, then start server
 CMD ["/bin/bash", "-c", "/app/download_models.sh && uv run python3 /app/server.py"]

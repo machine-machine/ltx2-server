@@ -163,4 +163,4 @@ if __name__ == "__main__":
     if "CUDA_VISIBLE_DEVICES" not in os.environ:
         os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     
-    uvicorn.run(app, host="0.0.0.0", port=8090)
+    uvicorn.run(app, host="0.0.0.0", port=28090)
