@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  ltx2:
+    build: .
+    container_name: ltx2-server
+    ports:
+      - "8090:8090"
+    volumes:
+      - ltx2-models:/models
+      - ltx2-outputs:/outputs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']  # Second 3090
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0  # Inside container sees GPU 1 as device 0
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+    restart: unless-stopped
+
+volumes:
+  ltx2-models:
+  ltx2-outputs:
