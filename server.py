@@ -9,10 +9,11 @@ import sys
 import uuid
 import time
 import asyncio
+import traceback
 from pathlib import Path
 from typing import Optional
 
-# Add LTX-2 packages to path
+# Add LTX-2 packages to path (workspace packages)
 sys.path.insert(0, "/app/packages/ltx-pipelines/src")
 sys.path.insert(0, "/app/packages/ltx-core/src")
 
@@ -152,6 +153,7 @@ async def run_generation(task_id: str, req: GenerateRequest):
         tasks[task_id].error = str(e)
         tasks[task_id].duration_seconds = round(elapsed, 1)
         print(f"Task {task_id} failed: {e}")
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
