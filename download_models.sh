@@ -42,9 +42,10 @@ if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
     mkdir -p "$GEMMA_DIR"
     HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
     
-    # Config/tokenizer files (tokenizer.model is the SentencePiece file required by LTX-2)
+    # All config/tokenizer/processor files needed by the pipeline
     for f in config.json tokenizer_config.json tokenizer.json tokenizer.model special_tokens_map.json \
-             model.safetensors.index.json generation_config.json; do
+             model.safetensors.index.json generation_config.json preprocessor_config.json \
+             processor_config.json added_tokens.json chat_template.json; do
         if [ ! -f "$GEMMA_DIR/$f" ]; then
             echo "  Downloading $f..."
             curl -L --retry 3 -o "$GEMMA_DIR/$f" "$HF_GEMMA/$f" 2>/dev/null || echo "  Warning: $f not available"
@@ -63,12 +64,14 @@ if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
     done
 else
     echo "✅ Gemma 3 text encoder already present."
-    # Ensure tokenizer.model exists (may be missing from earlier downloads)
-    if [ ! -f "$GEMMA_DIR/tokenizer.model" ]; then
-        echo "  Downloading missing tokenizer.model..."
-        HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
-        curl -L --retry 3 -o "$GEMMA_DIR/tokenizer.model" "$HF_GEMMA/tokenizer.model" 2>/dev/null || echo "  Warning: tokenizer.model not available"
-    fi
+    # Ensure all config files exist (may be missing from earlier downloads)
+    HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
+    for f in tokenizer.model preprocessor_config.json processor_config.json added_tokens.json chat_template.json; do
+        if [ ! -f "$GEMMA_DIR/$f" ]; then
+            echo "  Downloading missing $f..."
+            curl -L --retry 3 -o "$GEMMA_DIR/$f" "$HF_GEMMA/$f" 2>/dev/null || echo "  Warning: $f not available"
+        fi
+    done
 fi
 
 echo ""
