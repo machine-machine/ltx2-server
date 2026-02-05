@@ -1,6 +1,6 @@
 """
 LTX-2 Video Generation API Server
-Simple FastAPI wrapper around LTX-2 pipelines.
+FastAPI wrapper around LTX-2 distilled pipeline.
 Internal use only - not exposed to the internet.
 """
 
@@ -10,6 +10,7 @@ import uuid
 import time
 import asyncio
 import traceback
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -21,7 +22,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LTX-2 Video Generation", version="1.0.0")
+app = FastAPI(title="LTX-2 Video Generation", version="2.0.0")
 
 MODEL_DIR = Path("/models")
 OUTPUT_DIR = Path("/outputs")
@@ -30,17 +31,21 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 # Global pipeline (loaded once)
 pipeline = None
 pipeline_loading = False
+pipeline_error = None
+
 
 class GenerateRequest(BaseModel):
     prompt: str
-    image_url: Optional[str] = None
-    end_image_url: Optional[str] = None
-    width: int = 768
-    height: int = 512
+    image_path: Optional[str] = None  # Path to input image for img2vid
+    image_frame_idx: int = 0  # Which frame to condition on (0=first)
+    image_strength: float = 1.0  # Conditioning strength
+    width: int = 768  # Will be 2x upsampled (stage 2)
+    height: int = 512  # Will be 2x upsampled (stage 2)
     num_frames: int = 97  # ~4 seconds at 24fps
-    num_steps: int = 8    # Distilled model uses 8 steps
+    frame_rate: float = 24.0
     seed: Optional[int] = None
-    guidance_scale: float = 1.0  # CFG=1 for distilled
+    enhance_prompt: bool = False
+
 
 class TaskStatus(BaseModel):
     task_id: str
@@ -48,6 +53,7 @@ class TaskStatus(BaseModel):
     output_path: Optional[str] = None
     error: Optional[str] = None
     duration_seconds: Optional[float] = None
+
 
 # In-memory task store
 tasks: dict[str, TaskStatus] = {}
@@ -58,7 +64,16 @@ async def health():
     return {
         "status": "ok",
         "pipeline_loaded": pipeline is not None,
+        "pipeline_loading": pipeline_loading,
+        "pipeline_error": pipeline_error,
         "gpu": os.environ.get("CUDA_VISIBLE_DEVICES", "all"),
+        "models_dir": str(MODEL_DIR),
+        "models_present": {
+            "checkpoint": (MODEL_DIR / "ltx-2-19b-distilled-fp8.safetensors").exists(),
+            "spatial_upsampler": (MODEL_DIR / "ltx-2-spatial-upscaler-x2-1.0.safetensors").exists(),
+            "distilled_lora": (MODEL_DIR / "ltx-2-19b-distilled-lora-384.safetensors").exists(),
+            "gemma": (MODEL_DIR / "gemma-3-12b-it-qat-q4_0-unquantized" / "config.json").exists(),
+        },
     }
 
 
@@ -67,9 +82,9 @@ async def generate(req: GenerateRequest, background_tasks: BackgroundTasks):
     """Submit a video generation job. Returns task_id for polling."""
     task_id = str(uuid.uuid4())[:8]
     tasks[task_id] = TaskStatus(task_id=task_id, status="pending")
-    
+
     background_tasks.add_task(run_generation, task_id, req)
-    
+
     return {"task_id": task_id, "status": "pending"}
 
 
@@ -94,73 +109,122 @@ async def download(task_id: str):
 
 async def run_generation(task_id: str, req: GenerateRequest):
     """Background generation task."""
-    global pipeline, pipeline_loading
-    
+    global pipeline, pipeline_loading, pipeline_error
+
     tasks[task_id].status = "running"
     start_time = time.time()
-    
+
     try:
         # Lazy-load pipeline
         if pipeline is None and not pipeline_loading:
             pipeline_loading = True
+            pipeline_error = None
             print("Loading LTX-2 distilled pipeline...")
-            
-            from ltx_pipelines.distilled import DistilledPipeline
-            
-            pipeline = DistilledPipeline(
-                ckpt_path=str(MODEL_DIR / "ltx-2-19b-distilled-fp8.safetensors"),
-                text_encoder_path=str(MODEL_DIR / "gemma-3-12b-it-qat-q4_0-unquantized"),
-            )
-            pipeline_loading = False
-            print("Pipeline loaded!")
-        
+            print(f"  Checkpoint: {MODEL_DIR / 'ltx-2-19b-distilled-fp8.safetensors'}")
+            print(f"  Gemma: {MODEL_DIR / 'gemma-3-12b-it-qat-q4_0-unquantized'}")
+            print(f"  Upsampler: {MODEL_DIR / 'ltx-2-spatial-upscaler-x2-1.0.safetensors'}")
+
+            try:
+                import torch
+                from ltx_core.loader import LoraPathStrengthAndSDOps, LTXV_LORA_COMFY_RENAMING_MAP
+                from ltx_pipelines.distilled import DistilledPipeline
+
+                lora_path = str(MODEL_DIR / "ltx-2-19b-distilled-lora-384.safetensors")
+                loras = [LoraPathStrengthAndSDOps(lora_path, 1.0, LTXV_LORA_COMFY_RENAMING_MAP)]
+
+                pipeline = DistilledPipeline(
+                    checkpoint_path=str(MODEL_DIR / "ltx-2-19b-distilled-fp8.safetensors"),
+                    gemma_root=str(MODEL_DIR / "gemma-3-12b-it-qat-q4_0-unquantized"),
+                    spatial_upsampler_path=str(MODEL_DIR / "ltx-2-spatial-upscaler-x2-1.0.safetensors"),
+                    loras=loras,
+                    fp8transformer=True,  # FP8 mode for 24GB VRAM
+                )
+                print("Pipeline loaded successfully!")
+            except Exception as e:
+                pipeline_error = str(e)
+                print(f"Pipeline load failed: {e}")
+                traceback.print_exc()
+                raise
+            finally:
+                pipeline_loading = False
+
         # Wait if another request is loading the pipeline
         while pipeline_loading:
             await asyncio.sleep(1)
-        
+
         if pipeline is None:
-            raise RuntimeError("Failed to load pipeline")
-        
-        # Generate
+            raise RuntimeError(f"Failed to load pipeline: {pipeline_error}")
+
+        # Build images list for conditioning (image-to-video support)
+        images = []
+        if req.image_path and Path(req.image_path).exists():
+            images.append((req.image_path, req.image_frame_idx, req.image_strength))
+
+        # Set seed
+        seed = req.seed if req.seed is not None else int(time.time()) % 100000
+
         output_path = str(OUTPUT_DIR / f"{task_id}.mp4")
-        
-        kwargs = {
-            "prompt": req.prompt,
-            "width": req.width,
-            "height": req.height,
-            "num_frames": req.num_frames,
-            "num_inference_steps": req.num_steps,
-            "guidance_scale": req.guidance_scale,
-            "output_path": output_path,
-        }
-        
-        if req.seed is not None:
-            kwargs["seed"] = req.seed
-        
+
+        print(f"Generating video: {req.prompt[:80]}...")
+        print(f"  Size: {req.width}x{req.height}, frames: {req.num_frames}, seed: {seed}")
+
+        # Import needed utilities
+        import torch
+        from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
+        from ltx_pipelines.utils.media_io import encode_video
+        from ltx_pipelines.utils.constants import AUDIO_SAMPLE_RATE
+
+        tiling_config = TilingConfig.default()
+
         # Run in thread pool to not block event loop
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: pipeline(**kwargs))
-        
+
+        def do_generate():
+            with torch.inference_mode():
+                video, audio = pipeline(
+                    prompt=req.prompt,
+                    seed=seed,
+                    height=req.height,
+                    width=req.width,
+                    num_frames=req.num_frames,
+                    frame_rate=req.frame_rate,
+                    images=images,
+                    tiling_config=tiling_config,
+                    enhance_prompt=req.enhance_prompt,
+                )
+
+                video_chunks_number = get_video_chunks_number(req.num_frames, tiling_config)
+                encode_video(
+                    video=video,
+                    fps=req.frame_rate,
+                    audio=audio,
+                    audio_sample_rate=AUDIO_SAMPLE_RATE,
+                    output_path=output_path,
+                    video_chunks_number=video_chunks_number,
+                )
+
+        await loop.run_in_executor(None, do_generate)
+
         elapsed = time.time() - start_time
         tasks[task_id].status = "completed"
         tasks[task_id].output_path = output_path
         tasks[task_id].duration_seconds = round(elapsed, 1)
-        print(f"Task {task_id} completed in {elapsed:.1f}s")
-        
+        print(f"Task {task_id} completed in {elapsed:.1f}s → {output_path}")
+
     except Exception as e:
         elapsed = time.time() - start_time
         tasks[task_id].status = "failed"
         tasks[task_id].error = str(e)
         tasks[task_id].duration_seconds = round(elapsed, 1)
-        print(f"Task {task_id} failed: {e}")
+        print(f"Task {task_id} failed after {elapsed:.1f}s: {e}")
         traceback.print_exc()
 
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     # Use GPU 1 (second 3090) by default
     if "CUDA_VISIBLE_DEVICES" not in os.environ:
         os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    
+
     uvicorn.run(app, host="0.0.0.0", port=28090)
