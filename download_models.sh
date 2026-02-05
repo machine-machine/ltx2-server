@@ -42,8 +42,8 @@ if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
     mkdir -p "$GEMMA_DIR"
     HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
     
-    # Config/tokenizer files
-    for f in config.json tokenizer_config.json tokenizer.json special_tokens_map.json \
+    # Config/tokenizer files (tokenizer.model is the SentencePiece file required by LTX-2)
+    for f in config.json tokenizer_config.json tokenizer.json tokenizer.model special_tokens_map.json \
              model.safetensors.index.json generation_config.json; do
         if [ ! -f "$GEMMA_DIR/$f" ]; then
             echo "  Downloading $f..."
