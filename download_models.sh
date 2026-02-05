@@ -63,6 +63,12 @@ if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
     done
 else
     echo "✅ Gemma 3 text encoder already present."
+    # Ensure tokenizer.model exists (may be missing from earlier downloads)
+    if [ ! -f "$GEMMA_DIR/tokenizer.model" ]; then
+        echo "  Downloading missing tokenizer.model..."
+        HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
+        curl -L --retry 3 -o "$GEMMA_DIR/tokenizer.model" "$HF_GEMMA/tokenizer.model" 2>/dev/null || echo "  Warning: tokenizer.model not available"
+    fi
 fi
 
 echo ""
