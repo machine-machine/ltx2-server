@@ -35,12 +35,52 @@ else
     echo "✅ Distilled LoRA already present."
 fi
 
-# Gemma 3 text encoder (quantized)
+# Auth header for gated models (Gemma requires HF login)
+HF_AUTH=""
+if [ -n "$HF_TOKEN" ]; then
+    HF_AUTH="-H \"Authorization: Bearer $HF_TOKEN\""
+    echo "🔑 HuggingFace token found"
+fi
+
+# Helper: download with optional auth
+hf_download() {
+    local url="$1" dest="$2" show_progress="${3:-false}"
+    if [ "$show_progress" = "true" ]; then
+        eval curl -L --retry 3 --progress-bar $HF_AUTH -o "\"$dest\"" "\"$url\""
+    else
+        eval curl -L --retry 3 -sS $HF_AUTH -o "\"$dest\"" "\"$url\""
+    fi
+    # Verify it's not an HTML error page
+    if head -c 20 "$dest" 2>/dev/null | grep -qi "access\|<!DOCTYPE\|<html"; then
+        echo "  ❌ Download failed (gated model? check HF_TOKEN): $dest"
+        rm -f "$dest"
+        return 1
+    fi
+    return 0
+}
+
+# Gemma 3 text encoder (quantized) — GATED MODEL, needs HF_TOKEN
 GEMMA_DIR="$MODEL_DIR/gemma-3-12b-it-qat-q4_0-unquantized"
+HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
+
+# Always re-validate config.json (previous downloads may have saved HTML error pages)
+if [ -f "$GEMMA_DIR/config.json" ]; then
+    if head -c 5 "$GEMMA_DIR/config.json" | grep -q "^{"; then
+        echo "✅ Gemma 3 text encoder already present and valid."
+    else
+        echo "⚠️  Gemma files are corrupt (HTML error pages from gated download). Re-downloading..."
+        rm -rf "$GEMMA_DIR"
+    fi
+fi
+
 if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
-    echo "Downloading Gemma 3 text encoder..."
+    if [ -z "$HF_TOKEN" ]; then
+        echo "❌ HF_TOKEN not set! Gemma 3 is a gated model and requires authentication."
+        echo "   Set HF_TOKEN environment variable with a HuggingFace token that has Gemma access."
+        exit 1
+    fi
+    echo "Downloading Gemma 3 text encoder (gated model, using HF_TOKEN)..."
     mkdir -p "$GEMMA_DIR"
-    HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
     
     # All config/tokenizer/processor files needed by the pipeline
     for f in config.json tokenizer_config.json tokenizer.json tokenizer.model special_tokens_map.json \
@@ -48,7 +88,7 @@ if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
              processor_config.json added_tokens.json chat_template.json; do
         if [ ! -f "$GEMMA_DIR/$f" ]; then
             echo "  Downloading $f..."
-            curl -L --retry 3 -o "$GEMMA_DIR/$f" "$HF_GEMMA/$f" 2>/dev/null || echo "  Warning: $f not available"
+            hf_download "$HF_GEMMA/$f" "$GEMMA_DIR/$f" || echo "  Warning: $f not available (may be optional)"
         fi
     done
     
@@ -57,19 +97,17 @@ if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
         SHARD="model-0000${i}-of-00005.safetensors"
         if [ ! -f "$GEMMA_DIR/$SHARD" ]; then
             echo "  Downloading $SHARD..."
-            curl -L --retry 3 --progress-bar -o "$GEMMA_DIR/$SHARD" "$HF_GEMMA/$SHARD"
+            hf_download "$HF_GEMMA/$SHARD" "$GEMMA_DIR/$SHARD" true
         else
             echo "  ✅ $SHARD already present."
         fi
     done
 else
-    echo "✅ Gemma 3 text encoder already present."
-    # Ensure all config files exist (may be missing from earlier downloads)
-    HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
+    # Ensure all config files exist and are valid
     for f in tokenizer.model preprocessor_config.json processor_config.json added_tokens.json chat_template.json; do
         if [ ! -f "$GEMMA_DIR/$f" ]; then
             echo "  Downloading missing $f..."
-            curl -L --retry 3 -o "$GEMMA_DIR/$f" "$HF_GEMMA/$f" 2>/dev/null || echo "  Warning: $f not available"
+            hf_download "$HF_GEMMA/$f" "$GEMMA_DIR/$f" || echo "  Warning: $f not available"
         fi
     done
 fi
