@@ -220,13 +220,15 @@ async def run_generation(task_id: str, req: GenerateRequest):
                 use_fp8 = gpu_arch[0] >= 9 or (gpu_arch[0] == 8 and gpu_arch[1] >= 9)
                 print(f"  GPU arch: sm_{gpu_arch[0]}{gpu_arch[1]}, FP8: {'yes' if use_fp8 else 'no (using bf16)'}")
 
-                # Pick checkpoint based on FP8 support
-                # FP8: use fp8 checkpoint with native fp8 compute (~19GB)
-                # No FP8: use fp8 checkpoint but disable fp8 compute (loads as bf16, ~38GB)
-                #   -> may OOM on 24GB cards, but sequential offloading helps
                 checkpoint = str(MODEL_DIR / "ltx-2-19b-distilled-fp8.safetensors")
-                print(f"  Checkpoint: {checkpoint}")
-                print(f"  fp8transformer={use_fp8}")
+
+                if not use_fp8:
+                    # Ampere (3090): FP8 Triton kernels crash on this arch.
+                    # Skip LoRA to avoid FP8 weight fusion kernel.
+                    # The 384-res LoRA isn't needed for our 768x512 output anyway.
+                    print("  ⚠️  Ampere GPU: skipping LoRA (avoids FP8 Triton kernel)")
+                    print(f"  Checkpoint: {checkpoint} (fp8 weights, bf16 compute)")
+                    loras = []
 
                 pipeline = DistilledPipeline(
                     checkpoint_path=checkpoint,
