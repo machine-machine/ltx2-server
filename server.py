@@ -295,8 +295,10 @@ async def run_generation(task_id: str, req: GenerateRequest):
 
     except Exception as e:
         elapsed = time.time() - start_time
+        # Capture full traceback as string for API response
+        tb = traceback.format_exc()
         tasks[task_id].status = "failed"
-        tasks[task_id].error = str(e)
+        tasks[task_id].error = f"{str(e)}\n\nTraceback:\n{tb}"
         tasks[task_id].duration_seconds = round(elapsed, 1)
         print(f"Task {task_id} failed after {elapsed:.1f}s: {e}")
         traceback.print_exc()
