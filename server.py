@@ -18,8 +18,8 @@ from typing import Optional
 sys.path.insert(0, "/app/packages/ltx-pipelines/src")
 sys.path.insert(0, "/app/packages/ltx-core/src")
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 app = FastAPI(title="LTX-2 Video Generation", version="2.0.0")
@@ -105,6 +105,88 @@ async def download(task_id: str):
     if task.status != "completed" or not task.output_path:
         raise HTTPException(400, f"Task not completed: {task.status}")
     return FileResponse(task.output_path, media_type="video/mp4")
+
+
+UPLOAD_DIR = Path("/outputs/uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+@app.post("/v1/upload")
+async def upload_image(file: UploadFile = File(...)):
+    """Upload an image for img2vid conditioning. Returns the internal path."""
+    file_id = str(uuid.uuid4())[:8]
+    ext = Path(file.filename).suffix if file.filename else ".png"
+    dest = UPLOAD_DIR / f"{file_id}{ext}"
+    content = await file.read()
+    dest.write_bytes(content)
+    return {"path": str(dest), "size": len(content)}
+
+
+@app.get("/v1/frame/{task_id}")
+async def extract_frame(task_id: str, index: int = -1):
+    """Extract a frame from a completed video. index=-1 means last frame."""
+    if task_id not in tasks:
+        raise HTTPException(404, f"Task {task_id} not found")
+    task = tasks[task_id]
+    if task.status != "completed" or not task.output_path:
+        raise HTTPException(400, f"Task not completed: {task.status}")
+
+    import subprocess
+    video_path = task.output_path
+    frame_path = str(OUTPUT_DIR / f"{task_id}_frame_{index}.png")
+
+    if index == -1:
+        # Extract last frame using ffmpeg
+        cmd = [
+            "ffmpeg", "-y", "-sseof", "-0.1", "-i", video_path,
+            "-frames:v", "1", "-q:v", "1", frame_path
+        ]
+    else:
+        # Extract specific frame
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", f"select=eq(n\\,{index})", "-frames:v", "1",
+            "-q:v", "1", frame_path
+        ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise HTTPException(500, f"Frame extraction failed: {result.stderr}")
+
+    return FileResponse(frame_path, media_type="image/png")
+
+
+@app.get("/v1/frame/{task_id}/upload")
+async def extract_frame_and_save(task_id: str, index: int = -1):
+    """Extract a frame and save it as an upload (returns internal path for img2vid)."""
+    if task_id not in tasks:
+        raise HTTPException(404, f"Task {task_id} not found")
+    task = tasks[task_id]
+    if task.status != "completed" or not task.output_path:
+        raise HTTPException(400, f"Task not completed: {task.status}")
+
+    import subprocess
+    video_path = task.output_path
+    frame_id = str(uuid.uuid4())[:8]
+    frame_path = str(UPLOAD_DIR / f"{frame_id}.png")
+
+    if index == -1:
+        cmd = [
+            "ffmpeg", "-y", "-sseof", "-0.1", "-i", video_path,
+            "-frames:v", "1", "-q:v", "1", frame_path
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", f"select=eq(n\\,{index})", "-frames:v", "1",
+            "-q:v", "1", frame_path
+        ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise HTTPException(500, f"Frame extraction failed: {result.stderr}")
+
+    return {"path": frame_path, "task_id": task_id, "frame_index": index}
 
 
 async def run_generation(task_id: str, req: GenerateRequest):
