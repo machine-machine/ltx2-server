@@ -7,6 +7,9 @@ services:
     volumes:
       - ltx2-models:/models
       - ltx2-outputs:/outputs
+    networks:
+      - coolify
+      - default
     deploy:
       resources:
         reservations:
@@ -25,6 +28,10 @@ services:
       timeout: 5s
       start_period: 5s
       retries: 1
+
+networks:
+  coolify:
+    external: true
 
 volumes:
   ltx2-models:
