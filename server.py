@@ -214,12 +214,18 @@ async def run_generation(task_id: str, req: GenerateRequest):
                 lora_path = str(MODEL_DIR / "ltx-2-19b-distilled-lora-384.safetensors")
                 loras = [LoraPathStrengthAndSDOps(lora_path, 1.0, LTXV_LORA_COMFY_RENAMING_MAP)]
 
+                # Detect FP8 support (requires Ada Lovelace / sm_89+ or Hopper)
+                import torch
+                gpu_arch = torch.cuda.get_device_capability()
+                use_fp8 = gpu_arch[0] >= 9 or (gpu_arch[0] == 8 and gpu_arch[1] >= 9)
+                print(f"  GPU arch: sm_{gpu_arch[0]}{gpu_arch[1]}, FP8: {'yes' if use_fp8 else 'no (using bf16)'}")
+
                 pipeline = DistilledPipeline(
                     checkpoint_path=str(MODEL_DIR / "ltx-2-19b-distilled-fp8.safetensors"),
                     gemma_root=str(MODEL_DIR / "gemma-3-12b-it-qat-q4_0-unquantized"),
                     spatial_upsampler_path=str(MODEL_DIR / "ltx-2-spatial-upscaler-x2-1.0.safetensors"),
                     loras=loras,
-                    fp8transformer=True,  # FP8 mode for 24GB VRAM
+                    fp8transformer=use_fp8,
                 )
                 print("Pipeline loaded successfully!")
             except Exception as e:
