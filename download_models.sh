@@ -63,14 +63,32 @@ hf_download() {
 GEMMA_DIR="$MODEL_DIR/gemma-3-12b-it-qat-q4_0-unquantized"
 HF_GEMMA="https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main"
 
-# Always re-validate config.json (previous downloads may have saved HTML error pages)
-if [ -f "$GEMMA_DIR/config.json" ]; then
-    if head -c 5 "$GEMMA_DIR/config.json" | grep -q "^{"; then
-        echo "✅ Gemma 3 text encoder already present and valid."
+# Always re-validate ALL critical Gemma JSON files (previous downloads may have saved error pages)
+GEMMA_VALID=true
+for check_file in config.json tokenizer_config.json tokenizer.json; do
+    if [ -f "$GEMMA_DIR/$check_file" ]; then
+        # File must start with { or [ (valid JSON) and be > 100 bytes
+        FILE_SIZE=$(stat -c%s "$GEMMA_DIR/$check_file" 2>/dev/null || echo 0)
+        if [ "$FILE_SIZE" -lt 100 ] || ! head -c 5 "$GEMMA_DIR/$check_file" | grep -qE '^\s*[\{\[]'; then
+            echo "⚠️  $check_file is corrupt (${FILE_SIZE} bytes, not valid JSON)"
+            GEMMA_VALID=false
+        fi
     else
-        echo "⚠️  Gemma files are corrupt (HTML error pages from gated download). Re-downloading..."
-        rm -rf "$GEMMA_DIR"
+        echo "⚠️  $check_file is missing"
+        GEMMA_VALID=false
     fi
+done
+# Also check that at least one model shard exists and is > 1GB
+if [ "$GEMMA_VALID" = true ] && ! find "$GEMMA_DIR" -name "model-*.safetensors" -size +1G 2>/dev/null | grep -q .; then
+    echo "⚠️  No valid model shards found (>1GB)"
+    GEMMA_VALID=false
+fi
+
+if [ "$GEMMA_VALID" = true ]; then
+    echo "✅ Gemma 3 text encoder already present and valid."
+else
+    echo "⚠️  Gemma files are corrupt or incomplete. Wiping and re-downloading..."
+    rm -rf "$GEMMA_DIR"
 fi
 
 if [ ! -d "$GEMMA_DIR" ] || [ ! -f "$GEMMA_DIR/config.json" ]; then
