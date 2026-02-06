@@ -4,14 +4,9 @@ services:
   ltx2:
     build: .
     container_name: ltx2-server
-    ports:
-      - "28090:28090"
     volumes:
       - ltx2-models:/models
       - ltx2-outputs:/outputs
-    networks:
-      - coolify
-      - default
     deploy:
       resources:
         reservations:
@@ -30,17 +25,6 @@ services:
       timeout: 5s
       start_period: 5s
       retries: 1
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.ltx2.rule=Host(`hcsw4c08woo0sk88o84k4oos.machinemachine.ai`)"
-      - "traefik.http.routers.ltx2.entryPoints=https"
-      - "traefik.http.routers.ltx2.tls=true"
-      - "traefik.http.routers.ltx2.tls.certresolver=letsencrypt"
-      - "traefik.http.services.ltx2.loadbalancer.server.port=28090"
-
-networks:
-  coolify:
-    external: true
 
 volumes:
   ltx2-models:
