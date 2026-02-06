@@ -4,6 +4,8 @@ services:
   ltx2:
     build: .
     container_name: ltx2-server
+    ports:
+      - "28090:28090"
     volumes:
       - ltx2-models:/models
       - ltx2-outputs:/outputs
