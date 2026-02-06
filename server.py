@@ -220,8 +220,16 @@ async def run_generation(task_id: str, req: GenerateRequest):
                 use_fp8 = gpu_arch[0] >= 9 or (gpu_arch[0] == 8 and gpu_arch[1] >= 9)
                 print(f"  GPU arch: sm_{gpu_arch[0]}{gpu_arch[1]}, FP8: {'yes' if use_fp8 else 'no (using bf16)'}")
 
+                # Pick checkpoint based on FP8 support
+                # FP8: use fp8 checkpoint with native fp8 compute (~19GB)
+                # No FP8: use fp8 checkpoint but disable fp8 compute (loads as bf16, ~38GB)
+                #   -> may OOM on 24GB cards, but sequential offloading helps
+                checkpoint = str(MODEL_DIR / "ltx-2-19b-distilled-fp8.safetensors")
+                print(f"  Checkpoint: {checkpoint}")
+                print(f"  fp8transformer={use_fp8}")
+
                 pipeline = DistilledPipeline(
-                    checkpoint_path=str(MODEL_DIR / "ltx-2-19b-distilled-fp8.safetensors"),
+                    checkpoint_path=checkpoint,
                     gemma_root=str(MODEL_DIR / "gemma-3-12b-it-qat-q4_0-unquantized"),
                     spatial_upsampler_path=str(MODEL_DIR / "ltx-2-spatial-upscaler-x2-1.0.safetensors"),
                     loras=loras,
