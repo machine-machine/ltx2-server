@@ -21,8 +21,8 @@ WORKDIR /app
 # Use --python to ensure correct interpreter, allow network for index resolution
 RUN uv sync --python python3
 
-# Install FastAPI + uvicorn for our API server
-RUN uv pip install fastapi uvicorn[standard]
+# Install FastAPI + uvicorn + multipart for our API server
+RUN uv pip install fastapi uvicorn[standard] python-multipart
 
 # Create models directory (will be mounted as volume for persistence)
 RUN mkdir -p /models /outputs
